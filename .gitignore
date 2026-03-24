@@ -1,0 +1,33 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Corpus and DB — too large for git, ship via installer
+backend/corpus/
+backend/db/
+
+# Environment
+.env
+config.json
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Installer artifacts
+*.exe
+*.iss
+Output/
