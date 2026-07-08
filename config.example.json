@@ -1,0 +1,19 @@
+{
+  "municipio": "MuniGPT",
+  "logo": "logo.png",
+  "webSearchEnabled": false,
+  "braveApiKey": "",
+  "models": {
+    "chatDefault": "Qwen3-4B-Instruct-Q4_K_M.gguf",
+    "chatLowRam": "Qwen3-1.7B-Q4_K_M.gguf",
+    "embedding": "nomic-embed-text-v2-moe-Q4_K_M.gguf",
+    "lowRamThresholdGb": 12,
+    "nCtx": 4096,
+    "nThreads": 0
+  },
+  "license": {
+    "activated": false,
+    "licenseKey": "",
+    "activatedAt": ""
+  }
+}
