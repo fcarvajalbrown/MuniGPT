@@ -6,10 +6,11 @@ __pycache__/
 *.pyd
 .Python
 
-# Corpus, DB, and model weights — too large for git, ship via installer
+# Corpus, DB, model weights, and llama.cpp binaries — too large for git, ship via installer
 backend/corpus/
 backend/db/
 backend/models/
+backend/bin/
 
 # Python venv
 .venv/

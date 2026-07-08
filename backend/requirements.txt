@@ -1,19 +1,17 @@
 # MuniGPT backend dependencies (Python 3.12)
 #
-# llama-cpp-python must be installed from the prebuilt CPU wheel index to avoid
-# a source build (which needs CMake + a C++ toolchain). Install with:
+#   pip install -r requirements.txt
 #
-#   pip install -r requirements.txt \
-#     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# Local inference runs via the bundled official llama.cpp `llama-server` binary
+# (backend/bin/), NOT an in-process Python binding — the prebuilt llama-cpp-python
+# wheels require CPU instructions (AVX-512) that many target machines lack, while
+# the official binary does runtime CPU dispatch and runs on any x86-64.
 #
 # Web / API layer
 fastapi
 uvicorn[standard]
-httpx                 # only used by /search (Brave) — not for local inference
+httpx                 # /search (Brave) and local llama-server HTTP calls
 pydantic
-
-# Local inference (embedded llama.cpp — replaces Ollama)
-llama-cpp-python
 
 # RAG / vector store
 lancedb
