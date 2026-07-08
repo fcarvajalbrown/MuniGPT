@@ -2,7 +2,7 @@
 
 Asistente de inteligencia artificial local para municipios chilenos. Funciona completamente sin conexión a internet para la operación principal. Ningún dato institucional sale del equipo.
 
-Desarrollado por **Instituto Igualdad** en el contexto del cumplimiento de la Ley 21.663 (Marco de Ciberseguridad).
+Desarrollado por **Felipe Carvajal Brown** en el contexto del cumplimiento de la Ley 21.663 (Marco de Ciberseguridad).
 
 ---
 
@@ -90,7 +90,7 @@ munigpt/
 
 ## Licencia
 
-Distribuido por Instituto Igualdad bajo modelo de licenciamiento no comercial.  
+Distribuido por Felipe Carvajal Brown bajo modelo de licenciamiento no comercial.  
 Modelos y dependencias open source: Qwen 2.5 (Tongyi Qianwen License 2.0), Ollama (MIT), LanceDB (Apache 2.0), FastAPI (MIT).
 
 > **Nota v1.0:** Ollama será reemplazado por llama.cpp embebido para instalador completamente autocontenido sin dependencias externas.

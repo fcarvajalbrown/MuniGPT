@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MuniGPT is a fully-offline RAG assistant for Chilean municipal employees, built by Instituto Igualdad in the context of Ley 21.663 (Marco de Ciberseguridad). The core design constraint drives every decision: **no institutional data leaves the machine**. Everything (LLM inference, embeddings, vector search) runs locally via Ollama + LanceDB. The one exception is the optional `/search` web-search endpoint, where only the query string is sent out (to the Brave API).
+MuniGPT is a fully-offline RAG assistant for Chilean municipal employees, developed by Felipe Carvajal Brown in the context of Ley 21.663 (Marco de Ciberseguridad). The core design constraint drives every decision: **no institutional data leaves the machine**. Everything (LLM inference, embeddings, vector search) runs locally via Ollama + LanceDB. The one exception is the optional `/search` web-search endpoint, where only the query string is sent out (to the Brave API).
 
 All user-facing text and LLM output is in Spanish. The system prompt forbids the model from inventing legal articles or references and requires it to answer only from retrieved context.
 
@@ -60,3 +60,14 @@ The request flow is: **corpus_fetcher.py** downloads PDFs → **ingest.py** chun
 - **README describes the intended full product, not the current tree.** `frontend/` (React+Vite), `electron/`, `munigpt.py` launcher, and `requirements.txt` are described in README.md and `scaffold.ini` but are **not yet in the repo** — only the Python backend exists so far. `scaffold.ini` is the planned final layout.
 - **Model choices are pinned in code, not config**: `qwen2.5:3b` (chat) and `nomic-embed-text` (embeddings) are hardcoded constants in main.py, rag.py, and ingest.py. Changing the model means editing those constants in all relevant files. Chosen to run CPU-only, no GPU.
 - **Roadmap (from README):** Ollama is intended to be replaced by an embedded llama.cpp for a self-contained installer with no external dependencies.
+
+## Working conventions
+
+These come from the repo owner's global preferences and apply to all work in this repo:
+
+- **No emojis** anywhere — code, comments, docs, commit messages, PR descriptions, or chat.
+- **No AI attribution** — never add a `Co-Authored-By: Claude` trailer, a "Generated with Claude Code" line, or any mention/credit of an AI in commits, PRs, code, comments, or docs.
+- **Never invent facts** — no made-up legal articles, norma ids, citations, numbers, or references. This is both a house rule and the core product requirement: if a detail isn't verified or provided, stop and ask rather than fill the gap. It mirrors the system prompt in `main.py`, which forbids the model from inventing legal references.
+- **Not a lawyer — no legal advice.** This project sits in the Chilean municipal-law domain, but do not give legal opinions or interpretations. On any IP, licensing, contract, or liability question, decline and defer to a qualified lawyer.
+- **Present decisions as interactive options** (the arrow-selectable question UI), not plain-text lists, whenever offering the user a choice — with exactly one option marked "(Recommended)" first, and the reasoning stated.
+- **Commit/push only when asked.** This is a solo repo: when told to commit, work directly on `main` unless asked otherwise (do not spin up feature branches for small changes).

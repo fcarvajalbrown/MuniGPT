@@ -339,8 +339,8 @@ async def run(tiers: list[int], municipio: str | None, corpus_dir: Path):
 
     headers = {
         "User-Agent": (
-            "MuniGPT/0.1 corpus fetcher - Instituto Igualdad "
-            "(contacto@institutoigualdad.cl)"
+            "MuniGPT/0.1 corpus fetcher - Felipe Carvajal Brown "
+            "(fcarvajalbrown@gmail.com)"
         )
     }
 
