@@ -24,13 +24,17 @@ Nothing here is invented: items map to PRD requirement IDs.
       (`backend/tests/` — 16 passed; acceptance script prints citations per query.)
 
 ### A2. Frontend (M2 — not started)
-- [ ] React + Vite + TypeScript app under `frontend/` per `scaffold.ini`.
-- [ ] `FR-04` SSE streaming chat (consumes `/chat` token events).
-- [ ] `FR-03`/`FR-12` citation display (source filename + chunk).
-- [ ] `FR-05` web-search toggle pill.
-- [ ] Municipality branding pulled from `GET /config`.
-      Acceptance: `npm run build` clean; dev server renders; a scripted query
-      against the running backend streams tokens + shows citations.
+- [x] React + Vite + TypeScript app under `frontend/` per `scaffold.ini`
+      (`.tsx` instead of `.jsx` since the checklist mandates TypeScript).
+- [x] `FR-04` SSE streaming chat (consumes `/chat` token events) — `src/api.ts`
+      `streamChat` (fetch + ReadableStream SSE parser), rendered in `Chat.tsx`.
+- [x] `FR-03`/`FR-12` citation display (source filename + chunk) — `Message.tsx`.
+- [x] `FR-05` web-search toggle pill — `SearchToggle.tsx`.
+- [x] Municipality branding pulled from `GET /config` — `App.tsx`.
+      Acceptance: `npm run build` clean (tsc + vite, 31 modules); preview server
+      renders (`smoke:render` PASS: 200, #root, React bundle); scripted query
+      against the running backend streams tokens + citations (`smoke:chat` PASS:
+      5 citations, 330 tokens).
 
 ### A3. Electron shell (M3 — not started)
 - [ ] `electron/` main + preload + splash per `scaffold.ini`.

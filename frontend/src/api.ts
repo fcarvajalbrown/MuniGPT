@@ -1,0 +1,133 @@
+// api.ts — typed client for the MuniGPT backend.
+//
+// The chat endpoint streams Server-Sent Events over a POST body, so we cannot use
+// the browser EventSource (GET-only). Instead we read the fetch ReadableStream and
+// parse the `data: {...}\n\n` frames ourselves.
+
+export interface Citation {
+  source: string;
+  chunk_index: number;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface AppConfig {
+  municipio: string;
+  logo: string;
+  webSearchEnabled: boolean;
+  [key: string]: unknown;
+}
+
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface StreamHandlers {
+  onCitations?: (citations: Citation[]) => void;
+  onToken?: (token: string) => void;
+  onError?: (message: string) => void;
+  onDone?: () => void;
+  signal?: AbortSignal;
+}
+
+export async function fetchConfig(): Promise<AppConfig> {
+  const res = await fetch("/config");
+  if (!res.ok) throw new Error(`GET /config failed: ${res.status}`);
+  return (await res.json()) as AppConfig;
+}
+
+export async function webSearch(query: string): Promise<SearchResult[]> {
+  const res = await fetch("/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  if (res.status === 503) {
+    throw new Error("La búsqueda web no está configurada en este equipo.");
+  }
+  if (!res.ok) throw new Error(`POST /search failed: ${res.status}`);
+  const data = (await res.json()) as { results: SearchResult[] };
+  return data.results;
+}
+
+// Parses one SSE `data:` payload and dispatches to the matching handler.
+function dispatchEvent(raw: string, handlers: StreamHandlers): boolean {
+  let evt: { type?: string; content?: string; citations?: Citation[]; message?: string };
+  try {
+    evt = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  switch (evt.type) {
+    case "citations":
+      handlers.onCitations?.(evt.citations ?? []);
+      return false;
+    case "token":
+      if (evt.content) handlers.onToken?.(evt.content);
+      return false;
+    case "error":
+      handlers.onError?.(evt.message ?? "Error del modelo.");
+      return true;
+    case "done":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export async function streamChat(
+  message: string,
+  history: ChatMessage[],
+  handlers: StreamHandlers,
+): Promise<void> {
+  const res = await fetch("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, history }),
+    signal: handlers.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    handlers.onError?.(`El servicio de chat respondió ${res.status}.`);
+    handlers.onDone?.();
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finished = false;
+
+  try {
+    while (!finished) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line.
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("data: ")) {
+            if (dispatchEvent(line.slice(6), handlers)) {
+              finished = true;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if ((err as Error).name !== "AbortError") {
+      handlers.onError?.((err as Error).message);
+    }
+  } finally {
+    handlers.onDone?.();
+  }
+}
