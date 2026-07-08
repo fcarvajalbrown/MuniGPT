@@ -271,6 +271,11 @@ def main():
     parser.add_argument("--reset",      action="store_true")
     args = parser.parse_args()
 
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     print("MuniGPT -- ingest.py")
     print(f"Corpus: {args.corpus_dir}/")
     print(f"DB:     {args.db_dir}/")
