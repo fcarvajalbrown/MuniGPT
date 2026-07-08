@@ -1,0 +1,71 @@
+# MuniGPT — 1.0 Definition of Done (loop target)
+
+Source of truth for the autonomous build loop. "Done" = every item in section A
+checked and verified by the stated acceptance check. Section B is explicitly
+OUT of the unattended loop's scope and requires Felipe's input or missing assets.
+
+Grounded in `docs/MuniGPT_PRD_v0.1.pdf` (v0.2), milestones M1–M5 and FR-01…FR-15.
+Nothing here is invented: items map to PRD requirement IDs.
+
+---
+
+## A. In scope for the unattended loop (buildable AND verifiable on this machine)
+
+### A1. RAG / backend acceptance (M1 — mostly done, close it out)
+- [x] `FR-07` local audit log for `/search`: append `{timestamp, query, resultCount}`
+      to a local logfile. (Implemented in `main.py`: `_append_search_audit` ->
+      `backend/logs/search_audit.log`, one JSON line per outbound query.)
+- [x] M1 acceptance: a repeatable script that runs ~15 Spanish test queries through
+      `retrieve()` and asserts non-empty, cited results. Committed under `backend/`.
+      (`backend/acceptance_m1.py` — 15/15 PASS, exit 0.)
+- [x] Minimal pytest suite for `rag.retrieve` dedup/merge + `ingest` chunking
+      (no test suite exists today).
+      Acceptance: `pytest` green; the 15-query script prints citations.
+      (`backend/tests/` — 16 passed; acceptance script prints citations per query.)
+
+### A2. Frontend (M2 — not started)
+- [ ] React + Vite + TypeScript app under `frontend/` per `scaffold.ini`.
+- [ ] `FR-04` SSE streaming chat (consumes `/chat` token events).
+- [ ] `FR-03`/`FR-12` citation display (source filename + chunk).
+- [ ] `FR-05` web-search toggle pill.
+- [ ] Municipality branding pulled from `GET /config`.
+      Acceptance: `npm run build` clean; dev server renders; a scripted query
+      against the running backend streams tokens + shows citations.
+
+### A3. Electron shell (M3 — not started)
+- [ ] `electron/` main + preload + splash per `scaffold.ini`.
+- [ ] Spawns/reaps the Python backend; polls `/status`; loads the built frontend.
+- [ ] Root `package.json`; desktop-shortcut config.
+      Acceptance (PARTIAL — headless): `npm run build`/`electron-builder --dir`
+      succeeds and the app boots to splash. Full GUI walkthrough is NOT verifiable
+      unattended and is deferred to a manual check.
+
+### A4. Docs + packaging prep
+- [ ] Author the Inno Setup `.iss` script (FR-14) — SCRIPT ONLY, see B3.
+- [ ] Refresh `README.md` (it still says Ollama; the code uses bundled llama.cpp).
+      Acceptance: `.iss` lints for obvious path errors; README matches the code.
+
+---
+
+## B. OUT of the unattended loop — gated on Felipe or missing assets
+
+### B1. HMAC offline licensing (FR-08) — NEEDS A DECISION, will NOT be invented
+Rust validator + hardware fingerprint + key format + the Instituto Igualdad
+issuing secret are security-sensitive. Per house rule (never invent, ask when in
+doubt) the loop will NOT design a license-crypto scheme unattended.
+
+### B2. Real end-to-end chat verification
+Default 4B model is not downloaded (only Qwen3-1.7B is present). The loop can
+smoke-test generation on the 1.7B but cannot verify the shipping model.
+
+### B3. Compiled installer .exe (FR-14) + M4 pilot
+`iscc` (Inno Setup) is not installed and the 8 GB bundle assets aren't all present,
+so the `.exe` can be scripted but not built/verified here. M4 (on-site pilot at
+municipalities) is not a coding task.
+
+---
+
+## Definition of "done" for THIS loop
+Section A fully checked and verified → this is a **1.0 release candidate
+(code-complete for M2+M3, FR-07, tests, docs, installer script)**, explicitly
+minus B1–B3. On completion: commit, then hibernate.

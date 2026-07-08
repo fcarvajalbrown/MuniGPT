@@ -11,6 +11,7 @@ just the query string.
 import asyncio
 import json
 import httpx
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,30 @@ from rag import retrieve
 from ingest import run_ingest
 
 CONFIG_PATH = Path("../config.json")
+
+# FR-07: local audit trail for /search. The web-search endpoint is the only path
+# that sends anything off the machine (the query string, to Brave). We record one
+# JSON line per outbound search — timestamp, query, and result count — so the
+# institution can audit exactly what left the machine. Kept local; never sent
+# anywhere. The .log extension is gitignored so audit data is not committed.
+AUDIT_LOG_PATH = Path("logs/search_audit.log")
+
+
+def _append_search_audit(query: str, result_count: int) -> None:
+    """Appends one JSON line {timestamp, query, resultCount} to the local audit log."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "query": query,
+        "resultCount": result_count,
+    }
+    try:
+        AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        # Auditing must never take down the search endpoint; any failure here
+        # (bad path, disk full, permissions) is swallowed as a best-effort log.
+        pass
 
 SYSTEM_PROMPT = (
     "Eres un asistente de inteligencia artificial para funcionarios municipales chilenos. "
@@ -193,4 +218,6 @@ async def search(req: SearchRequest):
         }
         for item in data.get("web", {}).get("results", [])
     ]
+    # FR-07: record the outbound query in the local audit log.
+    _append_search_audit(req.query, len(results))
     return {"results": results}
