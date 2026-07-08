@@ -29,55 +29,38 @@ import asyncio
 import argparse
 import sys
 from pathlib import Path
-from tqdm import tqdm
 
-# ── PDF export URL pattern ─────────────────────────────────────────────────────
-# BCN exposes a direct PDF export endpoint for every norma.
-# No authentication required — all public law is freely downloadable.
-BCN_PDF_URL = (
-    "https://nuevo.leychile.cl/servicios/Consulta/Exportar"
-    "?radioExportar=Normas"
-    "&exportar_formato=pdf"
-    "&exportar_con_notas_bcn=True"
-    "&exportar_con_notas_originales=True"
-    "&exportar_con_notas_al_pie=True"
-    "&nombrearchivo={filename}"
-    "&hddResultadoExportar={idNorma}.0.0%23"
-)
+# ── BCN XML API ─────────────────────────────────────────────────────────────────
+# BCN's PDF export endpoint was discontinued; the stable interface is the norma
+# XML API (opt=7), which returns the full structured text of any norma. No auth
+# required, but a browser-like User-Agent is mandatory or BCN returns empty.
+# We extract plain text from the <Texto> elements and save .txt directly (no PDF).
+BCN_XML_URL = "https://www.bcn.cl/leychile/consulta/obtxml?opt=7&idNorma={idNorma}"
 
-# Search URL for fetching ordenanzas by municipality name
-BCN_SEARCH_URL = (
-    "https://nuevo.leychile.cl/servicios/Consulta/script/exportarBSimpleMetas"
-    "?cadena={query}"
-    "&exacta=0"
-    "&tipoviene=1"
-    "&orden=2"
-    "&npagina=1"
-    "&itemsporpagina=20"
-    "&seleccionado=0"
-)
+# XML namespace used by the leychile schema.
+BCN_NS = "{http://www.leychile.cl/esquemas}"
 
 # ── Corpus definition ──────────────────────────────────────────────────────────
 
 TIER_0_GENERAL = [
     # Constitución y bases del Estado — aplican a todo organismo público
     {
-        "idNorma": "22199",
+        "idNorma": "242302",
         "filename": "constitucion_politica_1980",
         "desc": "Constitución Política de Chile (Cap. XIV municipios)",
     },
     {
-        "idNorma": "27902",
+        "idNorma": "191865",
         "filename": "ley_18575_bases_administracion_estado",
         "desc": "Ley 18.575 — Bases Generales Administración del Estado",
     },
     {
-        "idNorma": "213004",
+        "idNorma": "210676",
         "filename": "ley_19880_procedimientos_administrativos",
         "desc": "Ley 19.880 — Bases Procedimientos Administrativos",
     },
     {
-        "idNorma": "259243",
+        "idNorma": "276363",
         "filename": "ley_20285_transparencia",
         "desc": "Ley 20.285 — Transparencia y Acceso a Información Pública",
     },
@@ -87,12 +70,12 @@ TIER_0_GENERAL = [
         "desc": "Ley 20.500 — Participación Ciudadana en Gestión Pública",
     },
     {
-        "idNorma": "1205964",
+        "idNorma": "1202434",
         "filename": "ley_21663_ciberseguridad",
         "desc": "Ley 21.663 — Marco de Ciberseguridad",
     },
     {
-        "idNorma": "1212409",
+        "idNorma": "1138479",
         "filename": "ley_21180_transformacion_digital",
         "desc": "Ley 21.180 — Transformación Digital del Estado",
     },
@@ -111,17 +94,17 @@ TIER_1_CORE = [
         "desc": "Ley 18.883 — Estatuto Funcionarios Municipales",
     },
     {
-        "idNorma": "6536",
+        "idNorma": "7054",
         "filename": "dl_3063_rentas_municipales",
         "desc": "DL 3.063 — Rentas Municipales",
     },
     {
-        "idNorma": "30614",
+        "idNorma": "70040",
         "filename": "ley_19418_juntas_vecinos",
         "desc": "Ley 19.418 — Juntas de Vecinos y Organizaciones Comunitarias",
     },
     {
-        "idNorma": "27668",
+        "idNorma": "28104",
         "filename": "ley_15231_juzgados_policia_local",
         "desc": "Ley 15.231 — Juzgados de Policía Local",
     },
@@ -131,7 +114,7 @@ TIER_1_CORE = [
         "desc": "Ley 19.886 — Compras y Contratación Pública",
     },
     {
-        "idNorma": "236195",
+        "idNorma": "230608",
         "filename": "ds250_reglamento_compras",
         "desc": "DS 250/2004 — Reglamento Ley de Compras Públicas",
     },
@@ -141,12 +124,12 @@ TIER_1_CORE = [
         "desc": "DS 458 — Ley General de Urbanismo y Construcciones",
     },
     {
-        "idNorma": "30595",
+        "idNorma": "30745",
         "filename": "ley_19378_atencion_primaria_salud",
         "desc": "Ley 19.378 — Estatuto Atención Primaria de Salud Municipal",
     },
     {
-        "idNorma": "1121560",
+        "idNorma": "1060115",
         "filename": "ley_20730_lobby",
         "desc": "Ley 20.730 — Lobby y Gestión de Intereses",
     },
@@ -160,27 +143,27 @@ TIER_2_EXTENDED = [
         "desc": "DFL 1/1997 — Estatuto Docentes (Ley 19.070)",
     },
     {
-        "idNorma": "1067715",
+        "idNorma": "1111237",
         "filename": "ley_21040_nueva_educacion_publica",
         "desc": "Ley 21.040 — Nueva Educación Pública",
     },
     {
-        "idNorma": "1186565",
+        "idNorma": "1194982",
         "filename": "ley_21591_royalty_minero",
         "desc": "Ley 21.591 — Royalty Minero / Fondo Equidad Territorial",
     },
     {
-        "idNorma": "224571",
+        "idNorma": "233184",
         "filename": "ds854_clasificaciones_presupuesto",
         "desc": "DS 854 — Clasificaciones Presupuesto Sector Público",
     },
     {
-        "idNorma": "220737",
+        "idNorma": "220208",
         "filename": "ley_19925_expendio_alcohol",
         "desc": "Ley 19.925 — Expendio y Consumo Bebidas Alcohólicas",
     },
     {
-        "idNorma": "1096773",
+        "idNorma": "1096337",
         "filename": "ley_20965_consejo_seguridad_comunal",
         "desc": "Ley 20.965 — Consejo Comunal de Seguridad Pública",
     },
@@ -206,58 +189,86 @@ TIER_DIRS = {
 
 # ── Downloader ─────────────────────────────────────────────────────────────────
 
-async def download_pdf(
+def _extract_norma(xml_bytes: bytes) -> tuple[str, str, str, str]:
+    """Parses BCN norma XML into (tipo, numero, titulo, full_text)."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml_bytes)
+
+    def _first_text(tag: str) -> str:
+        el = root.find(f".//{BCN_NS}{tag}")
+        return (el.text or "").strip() if el is not None and el.text else ""
+
+    tipo   = _first_text("Tipo")
+    numero = _first_text("Numero")
+    titulo = _first_text("TituloNorma")
+
+    # Concatenate every <Texto> element in document order — that is the law body.
+    parts = [(el.text or "").strip() for el in root.iter(f"{BCN_NS}Texto")]
+    full_text = "\n".join(p for p in parts if p)
+    return tipo, numero, titulo, full_text
+
+
+async def fetch_and_save_norma(
     client: httpx.AsyncClient,
     idNorma: str,
     filename: str,
     dest: Path,
     desc: str,
-) -> bool:
+) -> dict:
     """
-    Downloads a single norma PDF from BCN.
+    Fetches a norma from BCN's XML API and saves its plain text as {filename}.txt.
 
-    Args:
-        client:   Shared httpx async client.
-        idNorma:  BCN norma identifier.
-        filename: Output filename (without extension).
-        dest:     Destination directory.
-        desc:     Human-readable description for logging.
-
-    Returns:
-        True on success, False on failure.
+    Returns a dict: {ok, tipo, numero, chars} (ok=False on failure/empty).
     """
-    out_path = dest / f"{filename}.pdf"
+    out_path = dest / f"{filename}.txt"
     if out_path.exists():
         print(f"  [skip] {desc} — already downloaded")
-        return True
+        return {"ok": True, "skipped": True}
 
-    url = BCN_PDF_URL.format(idNorma=idNorma, filename=filename)
+    url = BCN_XML_URL.format(idNorma=idNorma)
 
-    try:
-        response = await client.get(url, timeout=60.0, follow_redirects=True)
-        response.raise_for_status()
+    # BCN rate-limits bursts, returning HTTP 429 or a small HTML page instead of
+    # XML. Retry with backoff; a real norma always starts with the XML prolog.
+    last_reason = "unknown"
+    for attempt in range(1, 6):
+        try:
+            response = await client.get(url, timeout=60.0, follow_redirects=True)
+            if response.status_code == 429:
+                last_reason = "HTTP 429 (throttled)"
+                await asyncio.sleep(10 * attempt)
+                continue
+            response.raise_for_status()
 
-        # BCN returns HTML error pages with 200 status when a norma doesn't exist.
-        # Detect this by checking content type.
-        content_type = response.headers.get("content-type", "")
-        if "pdf" not in content_type and len(response.content) < 5000:
-            print(f"  [warn] {desc} — BCN returned non-PDF (idNorma={idNorma} may be wrong)")
-            return False
+            content = response.content
+            if not content.lstrip().startswith(b"<?xml"):
+                last_reason = f"non-XML response ({len(content)} bytes, likely throttled)"
+                await asyncio.sleep(10 * attempt)
+                continue
 
-        out_path.write_bytes(response.content)
-        size_kb = len(response.content) // 1024
-        print(f"  [ok]   {desc} — {size_kb} KB")
-        return True
+            tipo, numero, titulo, text = _extract_norma(content)
+            if len(text) < 200:
+                print(f"  [warn] {desc} — little text extracted ({len(text)} chars)")
+                return {"ok": False}
 
-    except httpx.TimeoutException:
-        print(f"  [fail] {desc} — timeout (idNorma={idNorma})")
-        return False
-    except httpx.HTTPStatusError as e:
-        print(f"  [fail] {desc} — HTTP {e.response.status_code}")
-        return False
-    except Exception as e:
-        print(f"  [fail] {desc} — {e}")
-        return False
+            # Prepend the law identity so it appears in RAG context and citations.
+            header = f"{tipo} {numero} — {titulo}\n\n"
+            out_path.write_text(header + text, encoding="utf-8")
+            print(f"  [ok]   {desc} — {tipo} {numero}, {len(text):,} chars")
+            return {"ok": True, "tipo": tipo, "numero": numero, "chars": len(text)}
+
+        except httpx.TimeoutException:
+            last_reason = "timeout"
+            await asyncio.sleep(5 * attempt)
+        except httpx.HTTPStatusError as e:
+            last_reason = f"HTTP {e.response.status_code}"
+            break
+        except Exception as e:
+            last_reason = str(e)
+            break
+
+    print(f"  [fail] {desc} — {last_reason} (idNorma={idNorma})")
+    return {"ok": False}
 
 
 async def fetch_municipio_normas(
@@ -337,12 +348,15 @@ async def run(tiers: list[int], municipio: str | None, corpus_dir: Path):
     """
     corpus_dir.mkdir(parents=True, exist_ok=True)
 
+    # BCN's XML API returns an empty body unless the User-Agent looks like a browser.
     headers = {
         "User-Agent": (
-            "MuniGPT/0.1 corpus fetcher - Felipe Carvajal Brown "
-            "(fcarvajalbrown@gmail.com)"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
         )
     }
+
+    validation: list[tuple[str, dict]] = []
 
     async with httpx.AsyncClient(headers=headers) as client:
 
@@ -355,13 +369,14 @@ async def run(tiers: list[int], municipio: str | None, corpus_dir: Path):
             print(f"\n── Tier {tier_num}: {TIER_DIRS[tier_num]} ({len(docs)} documentos) ──")
 
             for doc in docs:
-                await download_pdf(
+                result = await fetch_and_save_norma(
                     client,
                     idNorma=doc["idNorma"],
                     filename=doc["filename"],
                     dest=tier_dir,
                     desc=doc["desc"],
                 )
+                validation.append((doc["desc"], result))
                 # Be polite to BCN — small delay between requests
                 await asyncio.sleep(1.5)
 
@@ -381,7 +396,7 @@ async def run(tiers: list[int], municipio: str | None, corpus_dir: Path):
             else:
                 print(f"  Encontradas {len(muni_normas)} normas")
                 for doc in muni_normas:
-                    await download_pdf(
+                    await fetch_and_save_norma(
                         client,
                         idNorma=doc["idNorma"],
                         filename=doc["filename"],
@@ -390,21 +405,32 @@ async def run(tiers: list[int], municipio: str | None, corpus_dir: Path):
                     )
                     await asyncio.sleep(1.5)
 
-    # Summary
-    total = sum(
-        len(list((corpus_dir / TIER_DIRS[t]).glob("*.pdf")))
-        for t in tiers
-        if (corpus_dir / TIER_DIRS[t]).exists()
-    )
-    if municipio and (corpus_dir / TIER_DIRS["municipio"]).exists():
-        total += len(list((corpus_dir / TIER_DIRS["municipio"]).glob("*.pdf")))
-
-    print(f"\n✓ Corpus descargado: {total} PDFs en {corpus_dir}/")
+    # Validation summary — flags any norma that failed or whose extracted
+    # Tipo/Numero looks inconsistent with the expected description.
+    print(f"\n{'='*60}\nValidacion de normas descargadas:")
+    ok = 0
+    for desc, res in validation:
+        if not res.get("ok"):
+            print(f"  [FALLO] {desc}")
+            continue
+        ok += 1
+        if res.get("skipped"):
+            print(f"  [existe] {desc}")
+        else:
+            print(f"  [ok] {res.get('tipo','?')} {res.get('numero','?'):>7}  ← {desc}")
+    print(f"\n✓ {ok}/{len(validation)} normas OK en {corpus_dir}/")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
+    # Force UTF-8 stdout so box-drawing/accented output doesn't crash on the
+    # Windows cp1252 console or when stdout is a piped subprocess (installer/Electron).
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Descarga el corpus legal chileno para MuniGPT desde BCN."
     )
