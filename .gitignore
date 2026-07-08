@@ -6,18 +6,27 @@ __pycache__/
 *.pyd
 .Python
 
-# Corpus and DB — too large for git, ship via installer
+# Corpus, DB, and model weights — too large for git, ship via installer
 backend/corpus/
 backend/db/
+backend/models/
+
+# Python venv
+.venv/
 
 # Environment
 .env
 config.json
 
-# Node
+# Node / frontend / electron
 node_modules/
 dist/
 .vite/
+frontend/dist/
+electron/out/
+
+# Installer artifacts
+installer/Output/
 
 # OS
 .DS_Store

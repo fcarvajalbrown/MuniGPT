@@ -1,0 +1,29 @@
+# MuniGPT backend dependencies (Python 3.12)
+#
+# llama-cpp-python must be installed from the prebuilt CPU wheel index to avoid
+# a source build (which needs CMake + a C++ toolchain). Install with:
+#
+#   pip install -r requirements.txt \
+#     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#
+# Web / API layer
+fastapi
+uvicorn[standard]
+httpx                 # only used by /search (Brave) — not for local inference
+pydantic
+
+# Local inference (embedded llama.cpp — replaces Ollama)
+llama-cpp-python
+
+# RAG / vector store
+lancedb
+pyarrow
+tantivy               # BM-25 full-text index for LanceDB hybrid search
+
+# Corpus ingestion
+pypdf
+pymupdf               # convert.py fallback extractor (better on some PDFs)
+
+# System / licensing
+psutil                # RAM-based model tier selection (FR-15)
+cryptography          # Ed25519 offline license verification (FR-08)
