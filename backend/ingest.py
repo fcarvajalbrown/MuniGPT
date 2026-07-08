@@ -4,23 +4,28 @@ ingest.py
 Chunks all PDFs and TXTs in the corpus directory into LanceDB.
 Scans corpus/ recursively - no tier subdirectories required.
 
+Embeddings are produced in-process by the embedded llama.cpp model
+(see inference.py) — no Ollama, no network.
+
 Usage:
     python ingest.py                  # uses ./corpus and ./db
     python ingest.py --reset          # wipe and rebuild
     python ingest.py --corpus-dir C:/path/to/corpus
-Dependencies:
-    pip install lancedb pypdf httpx tantivy
+
+The core is exposed as run_ingest(corpus_dir, db_dir, reset) so both this CLI
+and the FastAPI /ingest endpoint share one implementation.
 """
 
 import argparse
-import asyncio
+import json
 import re
 import sys
 from pathlib import Path
 
 import lancedb
 import pyarrow as pa
-import httpx
+
+import inference
 
 try:
     from pypdf import PdfReader
@@ -34,8 +39,8 @@ except ImportError:
 CHUNK_SIZE    = 500
 CHUNK_OVERLAP = 50
 TABLE_NAME    = "corpus"
-EMBED_MODEL   = "nomic-embed-text"
-OLLAMA_URL    = "http://localhost:11434/api/embeddings"
+META_FILE     = "embedding_meta.json"
+EMBED_BATCH   = 16
 
 
 # ── Text extraction ──────────────────────────────────────────────────────────────
@@ -46,7 +51,7 @@ def extract_text_from_pdf(path: Path) -> str:
         print(f"  [skip] {path.name} - pypdf not installed")
         return ""
 
-    reader = PdfReader(str(path)) # type: ignore
+    reader = PdfReader(str(path))  # type: ignore
     pages_text = []
     empty_pages = 0
 
@@ -135,22 +140,6 @@ def chunk_text(text: str) -> list[dict]:
     return chunks
 
 
-# ── Embeddings ───────────────────────────────────────────────────────────────────
-
-async def embed_batch(client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
-    """Embeds a list of strings via Ollama one at a time. Returns list of vectors."""
-    embeddings = []
-    for text in texts:
-        r = await client.post(
-            OLLAMA_URL,
-            json={"model": EMBED_MODEL, "prompt": text},
-            timeout=30.0,
-        )
-        r.raise_for_status()
-        embeddings.append(r.json()["embedding"])
-    return embeddings
-
-
 # ── Schema ───────────────────────────────────────────────────────────────────────
 
 def get_schema(embedding_dim: int) -> pa.Schema:
@@ -166,53 +155,32 @@ def get_schema(embedding_dim: int) -> pa.Schema:
 
 # ── Main ─────────────────────────────────────────────────────────────────────────
 
-async def ingest(corpus_dir: Path, db_dir: Path, reset: bool):
+def run_ingest(corpus_dir: Path, db_dir: Path, reset: bool) -> dict:
     """
-    Scans corpus_dir recursively for all PDFs and TXTs,
-    chunks them, embeds each chunk, and loads into LanceDB.
-    No tier directory structure required.
+    Scans corpus_dir recursively for all PDFs and TXTs, chunks them, embeds each
+    chunk via the local llama.cpp embedding model, and loads into LanceDB.
+    Returns {"docs": n, "chunks": n, "embedding_model": name}.
     """
+    corpus_dir = Path(corpus_dir)
+    db_dir     = Path(db_dir)
 
     if not corpus_dir.exists():
-        print(f"[error] Corpus directory not found: {corpus_dir}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
 
-    # Collect all documents recursively
     documents = sorted(
         f for ext in ("*.pdf", "*.txt")
         for f in corpus_dir.rglob(ext)
     )
-
     if not documents:
-        print(f"[error] No PDF or TXT files found in {corpus_dir}")
-        sys.exit(1)
+        raise FileNotFoundError(f"No PDF or TXT files found in {corpus_dir}")
 
     print(f"Found {len(documents)} documents in {corpus_dir}/")
 
-    # Check Ollama is running and model is available
-    print("Checking Ollama...")
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.get("http://localhost:11434/api/tags", timeout=5.0)
-            r.raise_for_status()
-            models = [m["name"] for m in r.json().get("models", [])]
-            if not any(EMBED_MODEL in m for m in models):
-                print(f"[error] Model '{EMBED_MODEL}' not found.")
-                print(f"  Run: ollama pull {EMBED_MODEL}")
-                sys.exit(1)
-            print(f"  OK - {EMBED_MODEL}")
-        except Exception as e:
-            print(f"[error] Cannot reach Ollama: {e}")
-            print("  Make sure Ollama is running.")
-            sys.exit(1)
+    # Embedding dimension from the live model (drives the table schema).
+    embedding_dim = inference.embedding_dim()
+    embed_model   = inference.embedding_model_name()
+    print(f"  Embedding model: {embed_model}  (dim {embedding_dim})")
 
-    # Get embedding dimension via a test call
-    async with httpx.AsyncClient() as client:
-        test_emb = await embed_batch(client, ["test"])
-        embedding_dim = len(test_emb[0])
-        print(f"  Embedding dim: {embedding_dim}")
-
-    # Connect to LanceDB
     db_dir.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(db_dir))
 
@@ -229,66 +197,71 @@ async def ingest(corpus_dir: Path, db_dir: Path, reset: bool):
         print(f"Appending to table '{TABLE_NAME}'...")
         table = db.open_table(TABLE_NAME)
 
-    # Process each document
     total_chunks = 0
 
-    async with httpx.AsyncClient() as client:
-        for doc_path in documents:
-            print(f"\n  {doc_path.name}")
+    for doc_path in documents:
+        print(f"\n  {doc_path.name}")
 
-            text = extract_text(doc_path)
-            if not text or len(text) < 100:
-                print(f"    [skip] No text extracted")
+        text = extract_text(doc_path)
+        if not text or len(text) < 100:
+            print(f"    [skip] No text extracted")
+            continue
+
+        print(f"    {len(text):,} chars")
+
+        chunks = chunk_text(text)
+        if not chunks:
+            print(f"    [skip] No chunks produced")
+            continue
+
+        print(f"    {len(chunks)} chunks - embedding...", flush=True)
+
+        doc_chunks = 0
+        for i in range(0, len(chunks), EMBED_BATCH):
+            batch = chunks[i:i + EMBED_BATCH]
+            try:
+                embeddings = inference.embed_documents([c["text"] for c in batch])
+            except Exception as e:
+                print(f"    [warn] Embedding failed: {e}")
                 continue
 
-            print(f"    {len(text):,} chars")
+            table.add([
+                {
+                    "text":        c["text"],
+                    "embedding":   emb,
+                    "source":      doc_path.name,
+                    "chunk_index": c["chunk_index"],
+                    "char_offset": c["char_offset"],
+                }
+                for c, emb in zip(batch, embeddings)
+            ])
+            doc_chunks += len(batch)
 
-            chunks = chunk_text(text)
-            if not chunks:
-                print(f"    [skip] No chunks produced")
-                continue
+        print(f"    {doc_chunks} chunks inserted")
+        total_chunks += doc_chunks
+        del chunks
+        del text
 
-            print(f"    {len(chunks)} chunks - embedding...", flush=True)
-            for idx, c in enumerate(chunks):
-                print(f"      chunk {idx+1}/{len(chunks)}...", end="\r", flush=True)
-
-            doc_chunks = 0
-            for i in range(0, len(chunks), 2):
-                batch = chunks[i:i + 2]
-                try:
-                    embeddings = await embed_batch(client, [c["text"] for c in batch])
-                except Exception as e:
-                    print(f"    [warn] Embedding failed: {e}")
-                    continue
-
-                table.add([
-                    {
-                        "text":        c["text"],
-                        "embedding":   emb,
-                        "source":      doc_path.name,
-                        "chunk_index": c["chunk_index"],
-                        "char_offset": c["char_offset"],
-                    }
-                    for c, emb in zip(batch, embeddings)
-                ])
-                doc_chunks += len(batch)
-
-            print(f"    {doc_chunks} chunks inserted")
-            total_chunks += doc_chunks
-            del chunks
-            del text
-
-    # Build full-text search index (BM-25)
+    # Build full-text search index (BM-25).
     print(f"\nBuilding FTS index...")
     try:
         table.create_fts_index("text", replace=True)
         print("  FTS OK")
     except Exception as e:
-        print(f"  [warn] FTS failed: {e} — pip install tantivy")
+        print(f"  [warn] FTS failed: {e} - pip install tantivy")
+
+    # Embedding-model metadata sidecar — rag.get_table() asserts against this so
+    # a stale/mismatched DB fails loudly instead of returning garbage retrieval.
+    (db_dir / META_FILE).write_text(
+        json.dumps({"embedding_model": embed_model, "dim": embedding_dim}),
+        encoding="utf-8",
+    )
 
     print(f"\n{'='*50}")
     print(f"Done. {len(documents)} docs, {total_chunks} chunks.")
     print(f"DB: {db_dir}/")
+
+    return {"docs": len(documents), "chunks": total_chunks, "embedding_model": embed_model}
 
 
 def main():
@@ -303,11 +276,11 @@ def main():
     print(f"DB:     {args.db_dir}/")
     print(f"Reset:  {args.reset}\n")
 
-    asyncio.run(ingest(
-        corpus_dir=args.corpus_dir,
-        db_dir=args.db_dir,
-        reset=args.reset,
-    ))
+    try:
+        run_ingest(corpus_dir=args.corpus_dir, db_dir=args.db_dir, reset=args.reset)
+    except FileNotFoundError as e:
+        print(f"[error] {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

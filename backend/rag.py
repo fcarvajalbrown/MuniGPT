@@ -1,64 +1,72 @@
 """
 rag.py — retrieves relevant chunks from LanceDB and assembles LLM context.
+Embeddings are produced by the embedded llama.cpp model (see inference.py).
 Used by main.py. Not a standalone script.
 """
 
-import httpx
-import lancedb
+import asyncio
+import json
 from pathlib import Path
 
-DB_DIR      = Path("db")
-TABLE_NAME  = "corpus"
-EMBED_MODEL = "nomic-embed-text"
-OLLAMA_URL  = "http://localhost:11434/api/embeddings"
-TOP_K       = 5
+import lancedb
+
+import inference
+
+DB_DIR     = Path("db")
+TABLE_NAME = "corpus"
+TOP_K      = 5
+META_FILE  = "embedding_meta.json"
 
 
-async def embed_query(query: str) -> list[float]:
-    """Embeds a query string via Ollama, returns a vector."""
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            OLLAMA_URL,
-            json={"model": EMBED_MODEL, "prompt": query},
-            timeout=30.0,
+def _assert_embedding_meta():
+    """
+    Fails loudly if the shipped/prebuilt DB was embedded with a different model
+    than the one running now — otherwise retrieval silently returns garbage.
+    """
+    meta_path = DB_DIR / META_FILE
+    if not meta_path.exists():
+        return  # DB predates metadata; ingest.py writes it going forward.
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    expected = inference.embedding_model_name()
+    if meta.get("embedding_model") != expected:
+        raise RuntimeError(
+            f"DB was built with embedding model '{meta.get('embedding_model')}' "
+            f"but the live model is '{expected}'. Re-run: python ingest.py --reset"
         )
-        r.raise_for_status()
-        return r.json()["embedding"]
 
 
 def get_table():
     """Opens the LanceDB corpus table. Raises if DB or table not found."""
     if not DB_DIR.exists():
         raise RuntimeError(f"DB not found at {DB_DIR}. Run ingest.py first.")
+    _assert_embedding_meta()
     db = lancedb.connect(str(DB_DIR))
-    if TABLE_NAME not in db.list_tables(): # type: ignore
+    if TABLE_NAME not in db.table_names():
         raise RuntimeError(f"Table '{TABLE_NAME}' not found. Run ingest.py first.")
     return db.open_table(TABLE_NAME)
 
 
 def vector_search(table, embedding: list[float]) -> list[dict]:
     """Returns top-k chunks by vector similarity."""
-    results = (
+    return (
         table.search(embedding)
         .limit(TOP_K)
         .select(["text", "source", "chunk_index"])
         .to_list()
     )
-    return results
 
 
 def fts_search(table, query: str) -> list[dict]:
     """Returns top-k chunks by BM-25 full-text search."""
     try:
-        results = (
+        return (
             table.search(query, query_type="fts")
             .limit(TOP_K)
             .select(["text", "source", "chunk_index"])
             .to_list()
         )
-        return results
     except Exception:
-        # FTS index may not exist if tantivy wasn't installed
+        # FTS index may not exist if tantivy wasn't installed.
         return []
 
 
@@ -88,24 +96,19 @@ def build_context(chunks: list[dict]) -> str:
 
 async def retrieve(query: str) -> tuple[str, list[dict]]:
     """
-    Main entry point. Embeds the query, runs hybrid search,
-    deduplicates results, and returns (context_string, raw_chunks).
+    Main entry point. Embeds the query, runs hybrid search, deduplicates,
+    and returns (context_string, raw_chunks).
 
-    Args:
-        query: User question in plain text.
-
-    Returns:
-        Tuple of (context string for LLM, list of raw chunk dicts for citations).
+    The embedding call is synchronous (llama.cpp), so it runs in a worker
+    thread to avoid blocking the event loop.
     """
     table = get_table()
 
-    # Run both search types in parallel would be cleaner but LanceDB
-    # is not async — run sequentially, combine results.
-    embedding = await embed_query(query)
+    embedding   = await asyncio.to_thread(inference.embed_query, query)
     vec_results = vector_search(table, embedding)
     fts_results = fts_search(table, query)
 
-    # Merge: vector results first (higher semantic relevance), then FTS
+    # Merge: vector results first (higher semantic relevance), then FTS.
     combined = deduplicate(vec_results + fts_results)[:TOP_K]
     context  = build_context(combined)
 

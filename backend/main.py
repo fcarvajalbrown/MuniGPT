@@ -1,9 +1,14 @@
 """
 main.py — FastAPI backend for MuniGPT.
-Endpoints: /chat (SSE streaming), /search, /status, /config.
+Endpoints: /chat (SSE streaming), /search, /ingest, /status, /config.
 Run with: uvicorn main:app --port 8000 --reload
+
+Chat and embeddings run fully locally via embedded llama.cpp (see inference.py).
+The only endpoint that ever reaches the network is /search (Brave), which sends
+just the query string.
 """
 
+import asyncio
 import json
 import httpx
 from pathlib import Path
@@ -11,10 +16,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from rag import retrieve
 
-OLLAMA_URL  = "http://localhost:11434/api/chat"
-CHAT_MODEL  = "qwen2.5:3b"
+import inference
+from rag import retrieve
+from ingest import run_ingest
+
 CONFIG_PATH = Path("../config.json")
 
 SYSTEM_PROMPT = (
@@ -35,6 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serializes ingest runs so two callers can't rebuild the DB at once.
+_ingest_lock = asyncio.Lock()
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -45,30 +54,44 @@ class SearchRequest(BaseModel):
     query: str
 
 
+class IngestRequest(BaseModel):
+    reset: bool = False
+
+
 @app.get("/status")
 async def status():
-    """Health check. Electron polls this to know when the backend is ready."""
-    return {"status": "ok"}
+    """Health check. The Electron shell polls this to know when the backend is ready."""
+    missing = inference.missing_models()
+    return {
+        "status": "ok",
+        "ready": not missing and inference.server_binary_present(),
+        "missingModels": missing,
+        **inference.model_info(),
+    }
 
 
 @app.get("/config")
 async def config():
-    """Serves config.json to the frontend."""
+    """Serves config.json to the frontend, with secrets stripped."""
     if not CONFIG_PATH.exists():
         return {"municipio": "MuniGPT", "logo": "logo.png", "webSearchEnabled": False}
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    # Never expose secrets to the renderer.
+    cfg.pop("braveApiKey", None)
+    if isinstance(cfg.get("license"), dict):
+        cfg["license"].pop("licenseKey", None)
+    return cfg
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     """
     RAG-augmented chat endpoint. Streams the LLM response via SSE.
-    Retrieves relevant legal context, injects it into the prompt,
-    then streams Ollama's response token by token.
+    Retrieves relevant legal context, injects it into the prompt, then streams
+    the local model's response token by token.
     """
     context, chunks = await retrieve(req.message)
 
-    # Build augmented user message with legal context
     if context:
         augmented = (
             f"Contexto legal relevante:\n\n{context}\n\n"
@@ -81,46 +104,70 @@ async def chat(req: ChatRequest):
     messages += req.history
     messages.append({"role": "user", "content": augmented})
 
-    # Build citation list to send before streaming starts
     citations = [
         {"source": c.get("source", ""), "chunk_index": c.get("chunk_index", 0)}
         for c in chunks
     ]
 
     async def stream():
-        # First event: citations so the frontend can display them immediately
+        # First event: citations so the frontend can display them immediately.
         yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
 
-        # Stream LLM response
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                OLLAMA_URL,
-                json={"model": CHAT_MODEL, "messages": messages, "stream": True},
-                timeout=120.0,
-            ) as response:
-                async for line in response.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        data = json.loads(line)
-                        token = data.get("message", {}).get("content", "")
-                        if token:
-                            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-                        if data.get("done"):
-                            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                            break
-                    except json.JSONDecodeError:
-                        continue
+        # Bridge the blocking llama.cpp generator (run on a worker thread) to the
+        # async SSE response via a thread-safe queue.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        DONE = object()
+
+        def produce():
+            try:
+                for token in inference.stream_chat(messages):
+                    loop.call_soon_threadsafe(queue.put_nowait, ("token", token))
+            except Exception as e:  # surface model errors to the client
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, DONE)
+
+        loop.run_in_executor(None, produce)
+
+        while True:
+            item = await queue.get()
+            if item is DONE:
+                break
+            kind, payload = item
+            if kind == "token":
+                yield f"data: {json.dumps({'type': 'token', 'content': payload})}\n\n"
+            elif kind == "error":
+                yield f"data: {json.dumps({'type': 'error', 'message': payload})}\n\n"
+                break
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.post("/ingest")
+async def ingest(req: IngestRequest):
+    """
+    Rebuilds/updates the RAG index from backend/corpus/. Lets IT re-index after
+    dropping Tier-3 PDFs without a terminal. Serialized; long-running.
+    """
+    if _ingest_lock.locked():
+        raise HTTPException(status_code=409, detail="An ingest is already running.")
+    async with _ingest_lock:
+        try:
+            result = await asyncio.to_thread(
+                run_ingest, Path("corpus"), Path("db"), req.reset
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return result
 
 
 @app.post("/search")
 async def search(req: SearchRequest):
     """
     Web search via Brave Search API. Only the query string leaves the machine.
-    Requires BRAVE_API_KEY in config.json. Returns top results as JSON.
+    Requires braveApiKey in config.json. Returns top results as JSON.
     """
     cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     api_key = cfg.get("braveApiKey")
