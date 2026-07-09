@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, webSearch, type ChatMessage } from "../api";
+import { streamChat, type ChatMessage } from "../api";
 import { Message, type UIMessage } from "./Message";
-import { SearchToggle } from "./SearchToggle";
+import { ComingSoonPill } from "./ComingSoonPill";
 
-export interface ChatProps {
-  webSearchEnabled: boolean;
-}
-
-export function Chat({ webSearchEnabled }: ChatProps) {
+export function Chat() {
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [searchActive, setSearchActive] = useState(false);
   const nextId = useRef(1);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -45,19 +40,6 @@ export function Chat({ webSearchEnabled }: ChatProps) {
     setInput("");
     setBusy(true);
 
-    // FR-05: when web search is on, run a Brave search and show results.
-    if (searchActive && webSearchEnabled) {
-      try {
-        const results = await webSearch(text);
-        patch(assistantId, { webResults: results });
-      } catch (err) {
-        patch(assistantId, {
-          content: (err as Error).message,
-          error: true,
-        });
-      }
-    }
-
     // FR-04: stream the RAG-grounded answer token by token.
     await streamChat(text, history, {
       onCitations: (citations) => patch(assistantId, { citations }),
@@ -73,7 +55,7 @@ export function Chat({ webSearchEnabled }: ChatProps) {
         setBusy(false);
       },
     });
-  }, [input, busy, messages, searchActive, webSearchEnabled, patch]);
+  }, [input, busy, messages, patch]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -98,11 +80,8 @@ export function Chat({ webSearchEnabled }: ChatProps) {
 
       <div className="composer">
         <div className="composer-toolbar">
-          <SearchToggle
-            enabled={webSearchEnabled}
-            active={searchActive}
-            onChange={setSearchActive}
-          />
+          <ComingSoonPill label="Búsqueda web" />
+          <ComingSoonPill label="Fuentes oficiales" />
         </div>
         <div className="composer-row">
           <textarea

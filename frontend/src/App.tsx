@@ -15,7 +15,6 @@ export function App() {
   }, []);
 
   const municipio = config?.municipio ?? "MuniGPT";
-  const webSearchEnabled = config?.webSearchEnabled ?? false;
   // FR-08: soft enforcement — show a banner when the license is absent, expired,
   // or invalid, but never block the chat.
   const license = config?.licenseStatus;
@@ -53,7 +52,7 @@ export function App() {
       )}
 
       <main className="main">
-        <Chat webSearchEnabled={webSearchEnabled} />
+        <Chat />
       </main>
     </div>
   );
