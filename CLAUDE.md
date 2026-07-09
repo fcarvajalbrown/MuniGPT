@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MuniGPT is a fully-offline RAG assistant for Chilean municipal employees, developed by Felipe Carvajal Brown in the context of Ley 21.663 (Marco de Ciberseguridad). The core design constraint drives every decision: **no institutional data leaves the machine**. Everything (LLM inference, embeddings, vector search) runs locally via a bundled **llama.cpp** server + LanceDB. The one exception is the optional `/search` web-search endpoint, where only the query string is sent out (to the Brave API).
+MuniGPT is a fully-offline RAG assistant for Chilean municipal employees, developed by Felipe Carvajal Brown in the context of Ley 21.663 (Marco de Ciberseguridad). The core design constraint drives every decision: **no institutional data leaves the machine**. Everything (LLM inference, embeddings, vector search) runs locally via a bundled **llama.cpp** server + LanceDB. The one network-capable path is the optional `/search` endpoint (Brave, only the query string ever leaves the machine) — but the frontend web-search control is currently **parked** behind a "Pronto disponible!" pill, so the shipping UI makes no outbound calls.
 
-All user-facing text and LLM output is in Spanish. The system prompt forbids the model from inventing legal articles or references and requires it to answer only from retrieved context.
+All user-facing text and LLM output is in Spanish. The system prompt forbids the model from inventing legal articles or references and requires it to answer only from retrieved context. It answers directly (no reflexive clarifying questions), and for "cómo/dónde pagar" procedural questions it points to the municipal channel (Tesorería / Dirección de Administración y Finanzas, or the comuna portal) without inventing specific offices, URLs or amounts.
 
 ## Commands
 
@@ -63,9 +63,9 @@ The request flow is: **corpus_fetcher.py** downloads PDFs → **ingest.py** chun
 **`inference.py`** — local inference layer, imported by `main.py`, `rag.py`, and `ingest.py`. Manages the bundled official llama.cpp `llama-server` binary (`backend/bin/`) rather than an in-process Python binding (prebuilt `llama-cpp-python` wheels need AVX-512 that many target machines lack; the official binary does runtime CPU dispatch). Runs two lazily-started, localhost, OpenAI-compatible server processes — one chat, one embeddings (`--embedding`) — reaped at exit. Query-time and index-time embeddings go through the identical model and the correct nomic task prefixes (`search_query:` vs `search_document:`), a hard requirement for retrieval quality. Chat model is chosen by total RAM (FR-15): a low-RAM fallback below `lowRamThresholdGb` (default 12 GB).
 
 **`main.py`** — FastAPI app, five endpoints:
-- `POST /chat` — the core endpoint. Calls `rag.retrieve()`, injects retrieved legal text into an augmented user message, then streams the model's response back as SSE. The stream sends a `citations` event first (so the frontend can render sources immediately), then `token` events, then a `done` event.
+- `POST /chat` — the core endpoint. Builds a **topic-aware retrieval query** from the recent user turns (via `_retrieval_query`, so multi-turn follow-ups like "menciona 5 ejemplos" keep the conversation topic instead of retrieving on the bare phrase), calls `rag.retrieve()`, injects the retrieved legal text into an augmented user message, then streams the model's response back as SSE. The stream sends a `citations` event first (so the frontend can render sources immediately), then `token` events, then a `done` event.
 - `POST /ingest` — triggers a corpus ingest run.
-- `POST /search` — Brave web search, gated on `braveApiKey` in config.json (503 if absent). Appends `{timestamp, query, resultCount}` to `backend/logs/search_audit.log`, one JSON line per outbound query (FR-07).
+- `POST /search` — Brave web search, gated on `braveApiKey` in config.json (503 if absent). Appends `{timestamp, query, resultCount}` to `backend/logs/search_audit.log`, one JSON line per outbound query (FR-07). Endpoint and its `webSearch` client remain in place but are **dormant** — the UI control is parked (see `frontend/`), so nothing calls it yet.
 - `GET /status` — health check; the desktop shell polls this to know the backend is ready.
 - `GET /config` — serves `config.json` (per-municipality branding + flags) to the frontend.
 
@@ -77,7 +77,7 @@ The request flow is: **corpus_fetcher.py** downloads PDFs → **ingest.py** chun
 
 **`convert.py`** — a throwaway utility that converts every corpus PDF to TXT via PyMuPDF (`fitz`). Non-destructive (writes the TXT alongside the PDF; earlier versions deleted the original). Not part of the main pipeline — `ingest.py` already reads PDFs directly, so this is only for cases where pypdf extraction is poor and PyMuPDF does better.
 
-**`frontend/`** — React + Vite + TypeScript chat UI. `src/api.ts` `streamChat` is a fetch + ReadableStream SSE parser that consumes `/chat` (FR-04); `Chat.tsx` renders the conversation, `Message.tsx` renders citations (source filename + chunk, FR-03/FR-12), `SearchToggle.tsx` is the web-search pill (FR-05), and `App.tsx` pulls per-municipality branding from `GET /config`. `scripts/smoke-render.mjs` and `scripts/smoke-chat.mjs` are Node smoke tests.
+**`frontend/`** — React + Vite + TypeScript chat UI. `src/api.ts` `streamChat` is a fetch + ReadableStream SSE parser that consumes `/chat` (FR-04); `Chat.tsx` renders the conversation, `Message.tsx` renders citations (source filename + chunk, FR-03/FR-12), `ComingSoonPill.tsx` renders the two parked "Pronto disponible!" toolbar pills (Búsqueda web — FR-05, currently deferred — and a future "Fuentes oficiales" per-comuna source lookup; the old `SearchToggle.tsx` was removed), and `App.tsx` pulls per-municipality branding from `GET /config`. `scripts/smoke-render.mjs` and `scripts/smoke-chat.mjs` are Node smoke tests.
 
 **`electron/`** — desktop shell. `main.js` spawns and reaps the Python backend (kills the uvicorn + llama-server process tree), polls `/status` via `waitForBackend`, then loads the built `frontend/dist` and injects the backend URL through `preload.js` `additionalArguments`. `splash.html` is the boot splash. contextIsolation on, nodeIntegration off. Packaged with electron-builder (root `package.json`).
 
