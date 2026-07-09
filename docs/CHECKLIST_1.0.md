@@ -37,12 +37,21 @@ Nothing here is invented: items map to PRD requirement IDs.
       5 citations, 330 tokens).
 
 ### A3. Electron shell (M3 — not started)
-- [ ] `electron/` main + preload + splash per `scaffold.ini`.
-- [ ] Spawns/reaps the Python backend; polls `/status`; loads the built frontend.
-- [ ] Root `package.json`; desktop-shortcut config.
-      Acceptance (PARTIAL — headless): `npm run build`/`electron-builder --dir`
-      succeeds and the app boots to splash. Full GUI walkthrough is NOT verifiable
-      unattended and is deferred to a manual check.
+- [x] `electron/` main + preload + splash per `scaffold.ini` (`main.js`,
+      `preload.js`, `splash.html`). contextIsolation on, nodeIntegration off.
+- [x] Spawns/reaps the Python backend; polls `/status`; loads the built frontend.
+      (`startBackend`/`stopBackend` kill the uvicorn+llama-server tree; `waitForBackend`
+      polls `/status`; `createMainWindow` loads `frontend/dist` and injects the
+      backend URL via preload `additionalArguments`.)
+- [x] Root `package.json`; desktop-shortcut config (NSIS `createDesktopShortcut`).
+      Acceptance (PARTIAL — headless): `electron-builder --dir` succeeds (exit 0,
+      `electron/out/win-unpacked/MuniGPT.exe`) and the app boots to splash
+      (verified via offscreen smoke: dev `SPLASH_OK` + packaged-exe marker file).
+      Full GUI walkthrough is deferred to a manual check.
+      Note: `win.signAndEditExecutable: false` is set because this machine is
+      non-admin with Developer Mode off, so electron-builder's winCodeSign cache
+      (macOS symlinks) cannot extract; disabling exe signing/rcedit editing skips
+      it. The signed installer with icon/metadata is B3 (out of scope).
 
 ### A4. Docs + packaging prep
 - [ ] Author the Inno Setup `.iss` script (FR-14) — SCRIPT ONLY, see B3.

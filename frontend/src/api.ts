@@ -4,6 +4,23 @@
 // the browser EventSource (GET-only). Instead we read the fetch ReadableStream and
 // parse the `data: {...}\n\n` frames ourselves.
 
+// In the packaged Electron app the frontend is loaded from file://, so the
+// backend must be addressed absolutely; the shell injects that URL via preload.
+// In the browser/dev server this is "" and requests stay same-origin (the Vite
+// proxy forwards them to the local backend).
+declare global {
+  interface Window {
+    munigpt?: { apiBase: string; version: string };
+  }
+}
+
+const API_BASE: string =
+  (typeof window !== "undefined" && window.munigpt?.apiBase) || "";
+
+function apiUrl(path: string): string {
+  return API_BASE + path;
+}
+
 export interface Citation {
   source: string;
   chunk_index: number;
@@ -36,13 +53,13 @@ export interface StreamHandlers {
 }
 
 export async function fetchConfig(): Promise<AppConfig> {
-  const res = await fetch("/config");
+  const res = await fetch(apiUrl("/config"));
   if (!res.ok) throw new Error(`GET /config failed: ${res.status}`);
   return (await res.json()) as AppConfig;
 }
 
 export async function webSearch(query: string): Promise<SearchResult[]> {
-  const res = await fetch("/search", {
+  const res = await fetch(apiUrl("/search"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
@@ -85,7 +102,7 @@ export async function streamChat(
   history: ChatMessage[],
   handlers: StreamHandlers,
 ): Promise<void> {
-  const res = await fetch("/chat", {
+  const res = await fetch(apiUrl("/chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, history }),

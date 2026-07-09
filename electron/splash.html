@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MuniGPT</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0f1420;
+        color: #e8ecf5;
+        overflow: hidden;
+      }
+      .wrap {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+      }
+      .name {
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .sub {
+        color: #93a0bd;
+        font-size: 13px;
+      }
+      .status {
+        color: #93a0bd;
+        font-size: 12px;
+        margin-top: 6px;
+        min-height: 16px;
+      }
+      .bar {
+        width: 220px;
+        height: 4px;
+        border-radius: 4px;
+        background: #21335f;
+        overflow: hidden;
+        position: relative;
+      }
+      .bar::after {
+        content: "";
+        position: absolute;
+        left: -40%;
+        width: 40%;
+        height: 100%;
+        background: #3d7bff;
+        animation: slide 1.2s infinite ease-in-out;
+      }
+      @keyframes slide {
+        to {
+          left: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="name">MuniGPT</div>
+      <div class="sub">Asistente legal municipal · sin conexión</div>
+      <div class="bar"></div>
+      <div class="status" id="status">Iniciando el motor local...</div>
+    </div>
+    <!--
+      The main process updates #status via webContents.executeJavaScript while the
+      backend warms up, so this window needs no node integration.
+    -->
+  </body>
+</html>

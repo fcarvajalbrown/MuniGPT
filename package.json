@@ -1,0 +1,69 @@
+{
+  "name": "munigpt",
+  "productName": "MuniGPT",
+  "version": "1.0.0",
+  "description": "MuniGPT — asistente legal municipal offline (RAG) para funcionarios municipales chilenos.",
+  "author": "Felipe Carvajal Brown",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron .",
+    "dist:dir": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "cl.munigpt.desktop",
+    "productName": "MuniGPT",
+    "directories": {
+      "output": "electron/out",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!models/**",
+          "!bin/**",
+          "!db/**",
+          "!corpus/**",
+          "!venv/**",
+          "!.venv/**",
+          "!**/__pycache__/**",
+          "!tests/**",
+          "!logs/**",
+          "!*.log"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MuniGPT"
+    }
+  }
+}
