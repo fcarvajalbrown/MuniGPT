@@ -13,6 +13,7 @@ import json
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -68,13 +69,46 @@ def _append_search_audit(query: str, result_count: int) -> None:
         pass
 
 SYSTEM_PROMPT = (
-    "Eres un asistente de inteligencia artificial para funcionarios municipales chilenos. "
-    "Respondes SIEMPRE en español. "
-    "Cuando respondas, utiliza exclusivamente la información del contexto legal proporcionado. "
-    "Si la respuesta no está en el contexto, di claramente que no tienes esa información. "
-    "Cita la fuente documental cuando sea relevante. "
-    "Sé claro, directo y preciso. No inventes artículos ni referencias legales."
+    "Eres un asistente de inteligencia artificial para funcionarios municipales "
+    "chilenos que atienden a vecinos. Respondes SIEMPRE en español, de forma clara "
+    "y directa, orientado a resolver la necesidad de la persona.\n\n"
+    "Reglas de contenido:\n"
+    "- Utiliza exclusivamente la información del contexto legal proporcionado. No "
+    "inventes artículos, cifras, plazos ni referencias legales. Si la respuesta no "
+    "está en el contexto, dilo con claridad.\n"
+    "- Cita la fuente documental (el nombre del archivo) cuando entregues contenido legal.\n\n"
+    "Responde directamente la consulta con la información del contexto. Solo si la "
+    "consulta es tan vaga que no puedes identificar de qué trata, haz UNA pregunta "
+    "breve para precisarla; en cualquier otro caso, responde de inmediato y no pidas "
+    "aclaraciones.\n\n"
+    "Cuando la consulta sea sobre CÓMO o DÓNDE realizar un trámite o pago:\n"
+    "- Explica lo que sí establece la normativa (por ejemplo, quién debe pagar y "
+    "sobre qué base), citando la fuente.\n"
+    "- Para el procedimiento concreto (dónde, cómo, montos, plazos o portal de pago), "
+    "indica que ese detalle depende de cada municipalidad y que debe realizarse en el "
+    "canal municipal correspondiente (por ejemplo, la Tesorería Municipal o la "
+    "Dirección de Administración y Finanzas del municipio, o el portal de pagos en "
+    "línea de la comuna). NO inventes direcciones, URLs, montos, oficinas ni pasos "
+    "específicos que no estén en el contexto."
 )
+
+
+def _configured_municipio() -> Optional[str]:
+    """The comuna this install serves (config.json), or None if unset/placeholder.
+
+    Named in the system prompt so procedural answers point to the right municipality
+    without inventing its specific offices or portals.
+    """
+    if not CONFIG_PATH.exists():
+        return None
+    try:
+        name = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("municipio")
+    except (ValueError, OSError):
+        return None
+    if not isinstance(name, str) or not name.strip() or name.strip() == "MuniGPT":
+        return None
+    return name.strip()
+
 
 app = FastAPI(title="MuniGPT API")
 
@@ -130,6 +164,22 @@ async def config():
     return cfg
 
 
+def _retrieval_query(message: str, history: list[dict]) -> str:
+    """Builds the retrieval query from the recent user turns plus the new message.
+
+    Retrieval must be topic-aware across turns: a follow-up like "menciona 5
+    ejemplos" carries no topic on its own, so we prepend the last couple of user
+    messages. Only user turns are used (assistant clarifying questions would add
+    noise), and we keep the current message so it still dominates the search.
+    """
+    prior_user = [
+        m.get("content", "") for m in history if m.get("role") == "user"
+    ]
+    parts = [p for p in prior_user[-2:] if p.strip()]
+    parts.append(message)
+    return "  ".join(parts).strip()
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
     """
@@ -137,7 +187,7 @@ async def chat(req: ChatRequest):
     Retrieves relevant legal context, injects it into the prompt, then streams
     the local model's response token by token.
     """
-    context, chunks = await retrieve(req.message)
+    context, chunks = await retrieve(_retrieval_query(req.message, req.history))
 
     if context:
         augmented = (
@@ -147,7 +197,16 @@ async def chat(req: ChatRequest):
     else:
         augmented = req.message
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_content = SYSTEM_PROMPT
+    municipio = _configured_municipio()
+    if municipio:
+        system_content += (
+            f"\n\nEsta instalación atiende a la {municipio}. Cuando orientes sobre "
+            f"dónde realizar un trámite o pago, refiérete a los canales de esa "
+            f"municipalidad, sin inventar sus oficinas, direcciones ni portales."
+        )
+
+    messages = [{"role": "system", "content": system_content}]
     messages += req.history
     messages.append({"role": "user", "content": augmented})
 
