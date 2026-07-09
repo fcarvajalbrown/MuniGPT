@@ -21,8 +21,27 @@ from pydantic import BaseModel
 import inference
 from rag import retrieve
 from ingest import run_ingest
+from license import verify_license
 
 CONFIG_PATH = Path("../config.json")
+
+
+def _current_license_status() -> dict:
+    """Verifies the license key in config.json and returns a renderer-safe status.
+
+    FR-08 enforcement is SOFT: this status is surfaced to the UI (banner) but no
+    endpoint blocks on it. Reads config fresh so re-activation needs no restart.
+    """
+    key = None
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            lic = cfg.get("license")
+            if isinstance(lic, dict):
+                key = lic.get("licenseKey")
+        except (ValueError, OSError):
+            key = None
+    return verify_license(key).to_public_dict()
 
 # FR-07: local audit trail for /search. The web-search endpoint is the only path
 # that sends anything off the machine (the query string, to Brave). We record one
@@ -91,6 +110,7 @@ async def status():
         "status": "ok",
         "ready": not missing and inference.server_binary_present(),
         "missingModels": missing,
+        "license": _current_license_status(),
         **inference.model_info(),
     }
 
@@ -105,6 +125,8 @@ async def config():
     cfg.pop("braveApiKey", None)
     if isinstance(cfg.get("license"), dict):
         cfg["license"].pop("licenseKey", None)
+    # Verified license status (FR-08) so the UI can show an activation banner.
+    cfg["licenseStatus"] = _current_license_status()
     return cfg
 
 

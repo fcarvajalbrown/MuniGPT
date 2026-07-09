@@ -31,10 +31,20 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface LicenseStatus {
+  valid: boolean;
+  state: "valid" | "expired" | "invalid" | "missing";
+  reason: string;
+  municipio?: string | null;
+  issuedTo?: string | null;
+  expiresAt?: string | null;
+}
+
 export interface AppConfig {
   municipio: string;
   logo: string;
   webSearchEnabled: boolean;
+  licenseStatus?: LicenseStatus;
   [key: string]: unknown;
 }
 

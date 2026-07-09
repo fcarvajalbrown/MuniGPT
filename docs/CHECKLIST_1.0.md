@@ -69,10 +69,22 @@ Nothing here is invented: items map to PRD requirement IDs.
 
 ## B. OUT of the unattended loop — gated on Felipe or missing assets
 
-### B1. HMAC offline licensing (FR-08) — NEEDS A DECISION, will NOT be invented
-Rust validator + hardware fingerprint + key format + the Instituto Igualdad
-issuing secret are security-sensitive. Per house rule (never invent, ask when in
-doubt) the loop will NOT design a license-crypto scheme unattended.
+### B1. Offline licensing (FR-08) — DONE (design decided with Felipe)
+Resolved and implemented after an interactive design pass. The scheme was NOT
+invented unattended: Felipe chose each axis. Shipped design:
+- **Ed25519 signatures** (not the earlier HMAC sketch): the private signing key is
+  held offline by Instituto Igualdad; only the public key ships in the client, so a
+  reverse-engineered client cannot forge licenses.
+- **No hardware binding** for 1.0 — avoids licenses bricking on reimage/hardware
+  swaps; forgery is still impossible via the signature.
+- **Soft enforcement** — status is surfaced (UI banner) but no endpoint blocks.
+- **Verification in the Python backend** via `cryptography` (already a dep).
+Components: `backend/license.py` (verifier, embedded public key),
+`tools/issue_license.py` (issuer-only minting tool, NOT shipped in the installer),
+`main.py` (verifies `config.json` `licenseKey` at startup; `/status` + `/config`
+expose status), frontend banner in `App.tsx`, and `backend/tests/test_license.py`.
+Acceptance: `pytest` green (29 passed); end-to-end mint→verify returns `valid`.
+The issuing private key is held offline by Felipe and is not in the repo.
 
 ### B2. Real end-to-end chat verification
 Default 4B model is not downloaded (only Qwen3-1.7B is present). The loop can

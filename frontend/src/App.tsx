@@ -16,6 +16,10 @@ export function App() {
 
   const municipio = config?.municipio ?? "MuniGPT";
   const webSearchEnabled = config?.webSearchEnabled ?? false;
+  // FR-08: soft enforcement — show a banner when the license is absent, expired,
+  // or invalid, but never block the chat.
+  const license = config?.licenseStatus;
+  const showLicenseBanner = license != null && !license.valid;
 
   return (
     <div className="app">
@@ -37,6 +41,14 @@ export function App() {
       {configError && (
         <div className="banner">
           No se pudo leer la configuración del municipio; usando valores por defecto.
+        </div>
+      )}
+
+      {showLicenseBanner && (
+        <div className="banner banner-license">
+          {license?.state === "missing"
+            ? "Esta copia no está activada. Solicite una licencia a Instituto Igualdad."
+            : license?.reason ?? "La licencia de esta copia no es válida."}
         </div>
       )}
 

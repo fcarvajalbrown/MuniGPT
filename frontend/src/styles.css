@@ -65,6 +65,12 @@ body {
   font-size: 13px;
 }
 
+/* License notice (FR-08) — warning, not an error: the app keeps working. */
+.banner-license {
+  background: #7a5b00;
+  color: #ffe9b3;
+}
+
 .main {
   flex: 1;
   min-height: 0;
