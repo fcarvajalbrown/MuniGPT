@@ -41,3 +41,5 @@ desktop.ini
 *.exe
 *.iss
 Output/
+# ...but the committed Inno Setup source script is the exception (FR-14).
+!installer/munigpt.iss

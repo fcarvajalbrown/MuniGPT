@@ -54,9 +54,16 @@ Nothing here is invented: items map to PRD requirement IDs.
       it. The signed installer with icon/metadata is B3 (out of scope).
 
 ### A4. Docs + packaging prep
-- [ ] Author the Inno Setup `.iss` script (FR-14) — SCRIPT ONLY, see B3.
-- [ ] Refresh `README.md` (it still says Ollama; the code uses bundled llama.cpp).
+- [x] Author the Inno Setup `.iss` script (FR-14) — SCRIPT ONLY, see B3.
+      (`installer/munigpt.iss`; git-tracked via a `!installer/munigpt.iss`
+      exception to the `*.iss` ignore rule.)
+- [x] Refresh `README.md` (it still says Ollama; the code uses bundled llama.cpp).
       Acceptance: `.iss` lints for obvious path errors; README matches the code.
+      (ISCC.exe turned out to be installed, so the script was compile-validated for
+      real: a temp copy with the multi-GB assets excluded compiled clean, exit 0 —
+      all directives/paths valid. Building the full ~8 GB installer .exe remains B3,
+      out of scope. README rewritten to bundled llama.cpp, real tree, model tiers,
+      endpoints, and test commands.)
 
 ---
 
