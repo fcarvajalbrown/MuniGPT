@@ -4,16 +4,18 @@ Endpoints: /chat (SSE streaming), /search, /ingest, /status, /config.
 Run with: uvicorn main:app --port 8000 --reload
 
 Chat and embeddings run fully locally via embedded llama.cpp (see inference.py).
-The only endpoint that ever reaches the network is /search (Brave), which sends
-just the query string.
+The only endpoint that ever reaches the network is /search (DDGS/DuckDuckGo),
+which sends just the query string.
 """
 
 import asyncio
 import json
-import httpx
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from ddgs import DDGS
+from ddgs.exceptions import DDGSException
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -93,6 +95,100 @@ SYSTEM_PROMPT = (
 )
 
 
+# Deterministic disambiguation for vague procedural/payment queries (e.g. "cómo
+# pagar su parte?"). This replaces an earlier prompt-based clarify-first attempt
+# that the 1.7B model applied pathologically (over-clarifying on clear queries
+# too). Categories are grounded in what's actually in the corpus: DL 3063 (Ley
+# de Rentas Municipales) Título III covers aseo domiciliario, Título IV covers
+# permiso de circulación and patentes municipales, Título VIII covers derechos
+# de propaganda / uso de vía pública; Ley 19925 covers patentes de alcoholes
+# separately. If a query already names one of these (via `keywords`), retrieval
+# proceeds directly instead of asking.
+CATEGORIES = [
+    {
+        "id": "aseo_domiciliario",
+        "label": "Aseo domiciliario",
+        "keywords": [
+            "aseo domiciliario", "derecho de aseo", "extracción de basura",
+            "recolección de basura", "aseo",
+        ],
+    },
+    {
+        "id": "permiso_circulacion",
+        "label": "Permiso de circulación",
+        "keywords": [
+            "permiso de circulación", "permiso circulación",
+            "circulación de vehículos", "revisión técnica",
+        ],
+    },
+    {
+        "id": "patente_municipal",
+        "label": "Patente municipal (comercio o profesional)",
+        "keywords": [
+            "patente comercial", "patente municipal", "patente profesional",
+            "patente de industria", "patente de negocio",
+        ],
+    },
+    {
+        "id": "patente_alcoholes",
+        "label": "Patente de alcoholes",
+        "keywords": [
+            "patente de alcohol", "expendio de alcohol",
+            "expendio de bebidas alcohólicas", "botillería",
+            "bebidas alcohólicas",
+        ],
+    },
+    {
+        "id": "derechos_propaganda",
+        "label": "Derechos de propaganda o uso de vía pública",
+        "keywords": [
+            "propaganda", "publicidad en la vía pública",
+            "ocupación de vía pública", "uso de vía pública",
+        ],
+    },
+]
+
+# Generic trigger words for procedural/payment questions. On their own they
+# don't identify a category, only that one should be asked for.
+PROCEDURAL_TRIGGERS = [
+    "pagar", "pago", "pague", "cobro", "cobran", "trámite", "tramite",
+    "boleta", "giro", "impuesto", "derecho municipal",
+]
+
+DISAMBIGUATION_PROMPT = "¿A qué trámite o pago municipal te refieres?"
+
+
+def _normalize(text: str) -> str:
+    """Lowercases and strips accents so matching is accent-insensitive."""
+    text = text.lower()
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
+    )
+
+
+def _matched_categories(message: str) -> list[dict]:
+    """Categories whose keywords already appear in the message."""
+    norm = _normalize(message)
+    return [
+        c for c in CATEGORIES if any(_normalize(kw) in norm for kw in c["keywords"])
+    ]
+
+
+def _is_ambiguous(message: str) -> bool:
+    """True if the message is a procedural/payment query with no named category."""
+    if _matched_categories(message):
+        return False
+    norm = _normalize(message)
+    return any(_normalize(t) in norm for t in PROCEDURAL_TRIGGERS)
+
+
+def _category_label(category_id: Optional[str]) -> Optional[str]:
+    for c in CATEGORIES:
+        if c["id"] == category_id:
+            return c["label"]
+    return None
+
+
 def _configured_municipio() -> Optional[str]:
     """The comuna this install serves (config.json), or None if unset/placeholder.
 
@@ -126,6 +222,7 @@ _ingest_lock = asyncio.Lock()
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []  # list of {role, content} dicts
+    category: Optional[str] = None  # set when the user resolved a disambiguation chip
 
 
 class SearchRequest(BaseModel):
@@ -156,7 +253,6 @@ async def config():
         return {"municipio": "MuniGPT", "logo": "logo.png", "webSearchEnabled": False}
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     # Never expose secrets to the renderer.
-    cfg.pop("braveApiKey", None)
     if isinstance(cfg.get("license"), dict):
         cfg["license"].pop("licenseKey", None)
     # Verified license status (FR-08) so the UI can show an activation banner.
@@ -164,19 +260,25 @@ async def config():
     return cfg
 
 
-def _retrieval_query(message: str, history: list[dict]) -> str:
+def _retrieval_query(
+    message: str, history: list[dict], category_label: Optional[str] = None
+) -> str:
     """Builds the retrieval query from the recent user turns plus the new message.
 
     Retrieval must be topic-aware across turns: a follow-up like "menciona 5
     ejemplos" carries no topic on its own, so we prepend the last couple of user
     messages. Only user turns are used (assistant clarifying questions would add
     noise), and we keep the current message so it still dominates the search.
+    When the user resolved a disambiguation chip, the category label is appended
+    to bias retrieval toward that specific topic.
     """
     prior_user = [
         m.get("content", "") for m in history if m.get("role") == "user"
     ]
     parts = [p for p in prior_user[-2:] if p.strip()]
     parts.append(message)
+    if category_label:
+        parts.append(category_label)
     return "  ".join(parts).strip()
 
 
@@ -186,8 +288,37 @@ async def chat(req: ChatRequest):
     RAG-augmented chat endpoint. Streams the LLM response via SSE.
     Retrieves relevant legal context, injects it into the prompt, then streams
     the local model's response token by token.
+
+    Deterministic disambiguation: a vague procedural/payment query with no
+    named category (see `_is_ambiguous`) short-circuits into a `disambiguate`
+    event carrying fixed category chips, instead of calling retrieve()/the LLM.
+    The frontend resends the same message with `category` set once the user
+    picks one, which skips this check.
     """
-    context, chunks = await retrieve(_retrieval_query(req.message, req.history))
+    if req.category is None and _is_ambiguous(req.message):
+        categories = [{"id": c["id"], "label": c["label"]} for c in CATEGORIES]
+
+        async def disambiguate_stream():
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "disambiguate",
+                        "message": DISAMBIGUATION_PROMPT,
+                        "categories": categories,
+                        "pendingMessage": req.message,
+                    }
+                )
+                + "\n\n"
+            )
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(disambiguate_stream(), media_type="text/event-stream")
+
+    category_label = _category_label(req.category)
+    context, chunks = await retrieve(
+        _retrieval_query(req.message, req.history, category_label)
+    )
 
     if context:
         augmented = (
@@ -272,32 +403,30 @@ async def ingest(req: IngestRequest):
 @app.post("/search")
 async def search(req: SearchRequest):
     """
-    Web search via Brave Search API. Only the query string leaves the machine.
-    Requires braveApiKey in config.json. Returns top results as JSON.
+    Web search via DDGS (DuckDuckGo), an unofficial free client with no API key.
+    Only the query string leaves the machine. Gated on `webSearchEnabled` in
+    config.json (503 if off). DDGS.text() is a blocking network call, so it runs
+    on a worker thread to avoid blocking the event loop.
     """
     cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
-    api_key = cfg.get("braveApiKey")
 
-    if not api_key:
-        raise HTTPException(status_code=503, detail="Brave API key not configured.")
+    if not cfg.get("webSearchEnabled"):
+        raise HTTPException(status_code=503, detail="Web search is disabled on this deployment.")
 
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            params={"q": req.query, "count": 5, "lang": "es", "country": "CL"},
-            headers={"Accept": "application/json", "X-Subscription-Token": api_key},
-            timeout=10.0,
+    try:
+        raw_results = await asyncio.to_thread(
+            DDGS().text, req.query, max_results=5
         )
-        r.raise_for_status()
-        data = r.json()
+    except DDGSException as e:
+        raise HTTPException(status_code=502, detail=f"Web search failed: {e}")
 
     results = [
         {
             "title":   item.get("title"),
-            "url":     item.get("url"),
-            "snippet": item.get("description"),
+            "url":     item.get("href"),
+            "snippet": item.get("body"),
         }
-        for item in data.get("web", {}).get("results", [])
+        for item in raw_results
     ]
     # FR-07: record the outbound query in the local audit log.
     _append_search_audit(req.query, len(results))

@@ -186,6 +186,30 @@ body {
   font-size: 12px;
 }
 
+.category-chips {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: #dbe6ff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.category-chip:hover {
+  background: var(--accent);
+  color: white;
+}
+
 .composer {
   border-top: 1px solid var(--border);
   padding: 12px 20px 16px;

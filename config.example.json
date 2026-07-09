@@ -2,7 +2,6 @@
   "municipio": "MuniGPT",
   "logo": "logo.png",
   "webSearchEnabled": false,
-  "braveApiKey": "",
   "models": {
     "chatDefault": "Qwen3-4B-Instruct-Q4_K_M.gguf",
     "chatLowRam": "Qwen3-1.7B-Q4_K_M.gguf",

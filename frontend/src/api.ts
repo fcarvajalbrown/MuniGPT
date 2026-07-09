@@ -54,8 +54,23 @@ export interface SearchResult {
   snippet: string;
 }
 
+// A fixed category chip offered when a query is too vague to retrieve against
+// (e.g. "cómo pagar su parte?"). Detection is a deterministic backend keyword
+// classifier, not the LLM — see main.py `_is_ambiguous`.
+export interface DisambiguationCategory {
+  id: string;
+  label: string;
+}
+
+export interface Disambiguation {
+  message: string;
+  categories: DisambiguationCategory[];
+  pendingMessage: string;
+}
+
 export interface StreamHandlers {
   onCitations?: (citations: Citation[]) => void;
+  onDisambiguate?: (info: Disambiguation) => void;
   onToken?: (token: string) => void;
   onError?: (message: string) => void;
   onDone?: () => void;
@@ -75,7 +90,10 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
     body: JSON.stringify({ query }),
   });
   if (res.status === 503) {
-    throw new Error("La búsqueda web no está configurada en este equipo.");
+    throw new Error("La búsqueda web está desactivada en este equipo.");
+  }
+  if (res.status === 502) {
+    throw new Error("La búsqueda web no respondió; intenta de nuevo más tarde.");
   }
   if (!res.ok) throw new Error(`POST /search failed: ${res.status}`);
   const data = (await res.json()) as { results: SearchResult[] };
@@ -84,7 +102,14 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
 
 // Parses one SSE `data:` payload and dispatches to the matching handler.
 function dispatchEvent(raw: string, handlers: StreamHandlers): boolean {
-  let evt: { type?: string; content?: string; citations?: Citation[]; message?: string };
+  let evt: {
+    type?: string;
+    content?: string;
+    citations?: Citation[];
+    message?: string;
+    categories?: DisambiguationCategory[];
+    pendingMessage?: string;
+  };
   try {
     evt = JSON.parse(raw);
   } catch {
@@ -93,6 +118,13 @@ function dispatchEvent(raw: string, handlers: StreamHandlers): boolean {
   switch (evt.type) {
     case "citations":
       handlers.onCitations?.(evt.citations ?? []);
+      return false;
+    case "disambiguate":
+      handlers.onDisambiguate?.({
+        message: evt.message ?? "",
+        categories: evt.categories ?? [],
+        pendingMessage: evt.pendingMessage ?? "",
+      });
       return false;
     case "token":
       if (evt.content) handlers.onToken?.(evt.content);
@@ -111,11 +143,12 @@ export async function streamChat(
   message: string,
   history: ChatMessage[],
   handlers: StreamHandlers,
+  category?: string,
 ): Promise<void> {
   const res = await fetch(apiUrl("/chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, history, category }),
     signal: handlers.signal,
   });
 

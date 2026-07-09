@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, type ChatMessage } from "../api";
+import { streamChat, webSearch, type ChatMessage } from "../api";
 import { Message, type UIMessage } from "./Message";
 import { ComingSoonPill } from "./ComingSoonPill";
+import { SearchToggle } from "./SearchToggle";
 
-export function Chat() {
+export interface ChatProps {
+  webSearchEnabled: boolean;
+}
+
+export function Chat({ webSearchEnabled }: ChatProps) {
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [searchActive, setSearchActive] = useState(false);
   const nextId = useRef(1);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -18,44 +24,85 @@ export function Chat() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...changes } : m)));
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || busy) return;
+  const send = useCallback(
+    async (overrideText?: string, category?: string) => {
+      const text = (overrideText ?? input).trim();
+      if (!text || busy) return;
 
-    const userMsg: UIMessage = { id: nextId.current++, role: "user", content: text };
-    const assistantId = nextId.current++;
-    const assistantMsg: UIMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      streaming: true,
-    };
-    // Build history from the prior turns before adding the new pair.
-    const history: ChatMessage[] = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+      const userMsg: UIMessage = { id: nextId.current++, role: "user", content: text };
+      const assistantId = nextId.current++;
+      const assistantMsg: UIMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        streaming: true,
+      };
+      // Build history from the prior turns before adding the new pair.
+      const history: ChatMessage[] = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setInput("");
-    setBusy(true);
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      if (overrideText === undefined) setInput("");
+      setBusy(true);
 
-    // FR-04: stream the RAG-grounded answer token by token.
-    await streamChat(text, history, {
-      onCitations: (citations) => patch(assistantId, { citations }),
-      onToken: (token) =>
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + token } : m,
-          ),
-        ),
-      onError: (message) => patch(assistantId, { content: message, error: true }),
-      onDone: () => {
-        patch(assistantId, { streaming: false });
-        setBusy(false);
-      },
-    });
-  }, [input, busy, messages, patch]);
+      // FR-05: when web search is on, run a DDGS search and show results
+      // alongside the RAG-grounded answer.
+      if (searchActive && webSearchEnabled) {
+        try {
+          const results = await webSearch(text);
+          patch(assistantId, { webResults: results });
+        } catch (err) {
+          patch(assistantId, {
+            content: (err as Error).message,
+            error: true,
+          });
+        }
+      }
+
+      // FR-04: stream the RAG-grounded answer token by token.
+      await streamChat(
+        text,
+        history,
+        {
+          onCitations: (citations) => patch(assistantId, { citations }),
+          onDisambiguate: ({ message, categories, pendingMessage }) => {
+            patch(assistantId, {
+              content: message,
+              categories,
+              pendingMessage,
+              streaming: false,
+            });
+            setBusy(false);
+          },
+          onToken: (token) =>
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: m.content + token } : m,
+              ),
+            ),
+          onError: (message) => patch(assistantId, { content: message, error: true }),
+          onDone: () => {
+            patch(assistantId, { streaming: false });
+            setBusy(false);
+          },
+        },
+        category,
+      );
+    },
+    [input, busy, messages, searchActive, webSearchEnabled, patch],
+  );
+
+  // A category chip click resends the original vague query with the chosen
+  // category attached, and clears the chips so they can't be clicked twice.
+  const selectCategory = useCallback(
+    (sourceId: number, categoryId: string, pendingMessage: string) => {
+      patch(sourceId, { categories: undefined });
+      void send(pendingMessage, categoryId);
+    },
+    [send, patch],
+  );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -74,13 +121,23 @@ export function Chat() {
           </div>
         )}
         {messages.map((m) => (
-          <Message key={m.id} msg={m} />
+          <Message
+            key={m.id}
+            msg={m}
+            onSelectCategory={(categoryId) =>
+              selectCategory(m.id, categoryId, m.pendingMessage ?? m.content)
+            }
+          />
         ))}
       </div>
 
       <div className="composer">
         <div className="composer-toolbar">
-          <ComingSoonPill label="Búsqueda web" />
+          <SearchToggle
+            enabled={webSearchEnabled}
+            active={searchActive}
+            onChange={setSearchActive}
+          />
           <ComingSoonPill label="Fuentes oficiales" />
         </div>
         <div className="composer-row">

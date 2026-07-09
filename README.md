@@ -3,8 +3,8 @@
 Asistente de inteligencia artificial local para municipios chilenos. La operación
 principal (chat, embeddings y búsqueda vectorial) funciona completamente sin
 conexión a internet: ningún dato institucional sale del equipo. La única salida
-opcional a la red es el endpoint `/search` (búsqueda web vía Brave), donde solo se
-envía el texto de la consulta.
+opcional a la red es el endpoint `/search` (búsqueda web vía DDGS/DuckDuckGo),
+desactivada por defecto, donde solo se envía el texto de la consulta.
 
 Desarrollado por **Felipe Carvajal Brown** en el contexto del cumplimiento de la
 Ley 21.663 (Marco de Ciberseguridad).
@@ -86,9 +86,10 @@ npm run dist:dir   # empaqueta la app desempaquetada (sin instalador)
 
 - `POST /chat` — chat RAG. Responde por SSE: primero un evento `citations`, luego
   eventos `token`, y finalmente `done`.
-- `POST /search` — búsqueda web vía Brave (requiere `braveApiKey` en `config.json`;
-  responde 503 si no está configurada). Registra cada consulta saliente en un log
-  de auditoría local (`backend/logs/search_audit.log`).
+- `POST /search` — búsqueda web vía DDGS/DuckDuckGo (sin API key; gatillada por
+  `webSearchEnabled` en `config.json`, responde 503 si está desactivada). Registra
+  cada consulta saliente en un log de auditoría local
+  (`backend/logs/search_audit.log`).
 - `GET /status` — estado del backend y de los modelos (lo consulta el shell).
 - `GET /config` — entrega `config.json` (sin secretos) al frontend.
 - `POST /ingest` — reconstruye o actualiza el índice desde `backend/corpus/`.

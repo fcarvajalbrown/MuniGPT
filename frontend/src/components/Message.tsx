@@ -1,4 +1,4 @@
-import type { Citation, SearchResult } from "../api";
+import type { Citation, DisambiguationCategory, SearchResult } from "../api";
 
 export interface UIMessage {
   id: number;
@@ -8,6 +8,10 @@ export interface UIMessage {
   webResults?: SearchResult[];
   streaming?: boolean;
   error?: boolean;
+  // Deterministic disambiguation chips (see main.py `_is_ambiguous`) and the
+  // original vague query they resolve, so a chip click can resend it.
+  categories?: DisambiguationCategory[];
+  pendingMessage?: string;
 }
 
 // De-duplicates citations by source for a compact display, keeping the set of
@@ -25,7 +29,12 @@ function groupCitations(citations: Citation[]): { source: string; chunks: number
   }));
 }
 
-export function Message({ msg }: { msg: UIMessage }) {
+export interface MessageProps {
+  msg: UIMessage;
+  onSelectCategory?: (categoryId: string) => void;
+}
+
+export function Message({ msg, onSelectCategory }: MessageProps) {
   const grouped = msg.citations ? groupCitations(msg.citations) : [];
 
   return (
@@ -36,6 +45,21 @@ export function Message({ msg }: { msg: UIMessage }) {
         {msg.content}
         {msg.streaming && <span className="cursor" aria-hidden="true">▋</span>}
       </div>
+
+      {msg.categories && msg.categories.length > 0 && (
+        <div className="category-chips" role="group" aria-label="Categorías de trámite">
+          {msg.categories.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className="category-chip"
+              onClick={() => onSelectCategory?.(c.id)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {grouped.length > 0 && (
         <div className="citations" aria-label="Fuentes citadas">

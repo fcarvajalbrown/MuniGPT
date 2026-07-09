@@ -10,7 +10,8 @@
 # Web / API layer
 fastapi
 uvicorn[standard]
-httpx                 # /search (Brave) and local llama-server HTTP calls
+httpx                 # local llama-server HTTP calls, BCN corpus fetcher
+ddgs                  # /search (DuckDuckGo), unofficial free client, no API key
 pydantic
 
 # RAG / vector store
